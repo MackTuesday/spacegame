@@ -47,9 +47,11 @@ class SDLCharGraphics {
 
 public:
 
+    unsigned mPixelRows;
+    unsigned mPixelCols;
     unsigned* mPixels;
 
-    SDLCharGraphics();
+    SDLCharGraphics(unsigned numPixelRows, unsigned numPixelCols);
     virtual ~SDLCharGraphics();
 
     int WriteCharacters(SDLCharGraphicsPane* pane, unsigned* chars, 

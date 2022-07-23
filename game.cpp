@@ -22,23 +22,26 @@
 #include <vector>
 
 
-#define kBitsPerStellarSquare 3
-#define kISMapColumns        25
-#define kISMapRows           25
-#define kIPMapColumns        25
-#define kIPMapRows           25
-#define kPlanetMapColumns   500
-#define kPlanetMapRows      500
-#define kInfoColumns         27
-#define kInfoRows            25
+#define kMainWindowCols     1012
+#define kMainWindowRows      512
+#define kBitsPerStellarSquare  3
+#define kISMapColumns         25
+#define kISMapRows            25
+#define kIPMapColumns         25
+#define kIPMapRows            25
+#define kTerrainBuffColumns 4000
+#define kTerrainBuffRows    2000
+#define kInfoColumns          27
+#define kInfoRows             25
+#define kMaxPlanetaryLevel     6
 
 // These need to be >= any of the other character Columns and Rows #defines.
-// Disregard the defines that refer to number of pixel columsn and rows
+// This rule excludes the #defines that refer to number of pixel columsn and rows.
 #define kMaxColumns          50
 #define kMaxRows             50
 
 
-static constexpr uint64_t gOrigin = uint64_t(1) << 63;
+static constexpr uint32_t gOrigin = uint32_t(1) << 31;
 
 
 struct GameState {
@@ -55,9 +58,9 @@ struct GameState {
     SDLCharGraphicsPane* mInfoPane;
     StarSystem* mStarSystem;
     Planet* mPlanet;
-    uint64_t mX;
-    uint64_t mY;
-    uint64_t mStepSize;
+    uint32_t mX;
+    uint32_t mY;
+    uint32_t mStepSize;
     int mLevel;
     int mLastLevel;
     GameState* mLastState;
@@ -75,13 +78,12 @@ static GameState* gCurrentState = nullptr;
 static unsigned cgBuffer[kMaxColumns*kMaxRows];
 static unsigned fgClrBuffer[kMaxColumns*kMaxRows];
 static unsigned bgClrBuffer[kMaxColumns*kMaxRows];
-static float gTerrainBuffer[kPlanetMapColumns*kPlanetMapRows];
+static float gTerrainBuffer[kTerrainBuffColumns*kTerrainBuffRows];
 static double gWaterline = 0.0;
 
 
 //GameState* 
-void HandleKeyDown(SDL_Event& sdlEvent, SDL_Window* win, SDLCharGraphics& charGraphics);//,
-                         //GameState* state);
+void HandleKeyDown(SDL_Event& sdlEvent, SDL_Window* win, SDLCharGraphics& charGraphics);
 void ClearCharGraphicsBuffer(unsigned* buffer, unsigned bufferSize);
 void FillColorBuffer(unsigned* buffer, unsigned bufferSize, unsigned color);
 void CopyStrToIntBuffer(unsigned* buffer, char* str, unsigned maxlen);
@@ -90,17 +92,24 @@ unsigned LumToSymbol(double lum);
 unsigned PlanetMassToSymbol(double massInKg);
 unsigned LifeRGB(double life);
 unsigned PlanetSymbolRGB(Planet* planet, StarSystem* starSystem);
-//vector<unsigned> PlanetPalette(uint64_t seed, unsigned size);
-void FormatInfo(unsigned* buffer, uint64_t posX, uint64_t posY, bool star, 
+//vector<unsigned> PlanetPalette(uint32_t seed, unsigned size);
+void FormatInfo(unsigned* buffer, uint32_t posX, uint32_t posY, bool star, 
                 uint64_t starTableMod, uint64_t starTableLookup);
 void PaintTerrain(SDL_Window* w);
-int UpdateGraphics(SDLCharGraphics& cg, SDL_Window* win);//, GameState* state);
+int UpdateGraphics(SDLCharGraphics& cg, SDL_Window* win);
+inline float PerlinNoise(uint32_t x, uint32_t y, unsigned fracbits);
+inline float PerlinNoiseXPeriodic(uint32_t x, uint32_t y, unsigned fracbits, 
+                                  uint32_t xOrigin, unsigned periodbits);
 inline double PerlinNoise(double x, double y);
 inline double PerlinNoise(double x, double y, double z);
 inline double Hermite(double x);
-inline uint64_t ToFixedPoint12p52(double x);
+inline float Hermite(float x);
+//inline uint64_t ToFixedPoint12p52(double x);
+inline uint32_t ToFixedPoint9p23(float x);
 inline uint64_t NoiseFunction1(uint64_t x);
 inline uint64_t NoiseFunction2(uint64_t x);
+inline uint32_t NoiseFunction1(uint32_t x);
+inline uint32_t NoiseFunction2(uint32_t x);
 
 
 int main(int argc, char** argv)
@@ -110,7 +119,8 @@ int main(int argc, char** argv)
     //freopen("CON", "w", stdout);
 
     SDL_Init(SDL_INIT_VIDEO);
-    SDL_Window* win = SDL_CreateWindow("roguelike", 40, 40, 1000, 500, 0);
+    SDL_Window* win = 
+        SDL_CreateWindow("Space Game", 40, 40, kMainWindowCols, kMainWindowRows, 0);
 
     std::vector<unsigned char> fontSheetVec, fontSheetVec2, fontSheetVec3;
     unsigned fontSheetWidth, fontSheetHeight;
@@ -130,28 +140,20 @@ int main(int argc, char** argv)
                            ((val & 0x0000ff00) << 8)  | ((val & 0x000000ff) << 24);
         fontSheetPixels2[i] = swapped;
     }
-/*  lodepng::decode(fontSheetVec3, fontSheetWidth, fontSheetHeight, "fontsheet3.png");
-    unsigned* fontSheetPixels3 = (unsigned*)fontSheetVec3.data();
-    for (unsigned i = 0; i < fontSheetVec3.size()/4; i++) {
-        unsigned val = fontSheetPixels3[i];
-        unsigned swapped = ((val & 0xff000000) >> 24) | ((val & 0x00ff0000) >> 8) |
-                           ((val & 0x0000ff00) << 8)  | ((val & 0x000000ff) << 24);
-        fontSheetPixels3[i] = swapped;
-    } */
 
-    SDLCharGraphics charGraphics;
+    SDLCharGraphics charGraphics(kMainWindowRows, kMainWindowCols);
 
     gInterstellarState->mMapPane = 
         new SDLCharGraphicsPane(kISMapColumns, kISMapRows, 16, 16, 2, 2, 
                                 fontSheetPixels, 16, 22, 0, 0, true);
     gInterstellarState->mInfoPane =
         new SDLCharGraphicsPane(kInfoColumns, kInfoRows, 14, 16, 2, 2, 
-                                fontSheetPixels2, 16, 22, 500, 0, false);
+                                fontSheetPixels2, 16, 22, 512, 0, false);
     gInterstellarState->mStarSystem = nullptr;
     gInterstellarState->mPlanet = nullptr;
     gInterstellarState->mX = 0;
     gInterstellarState->mY = 0;
-    gInterstellarState->mStepSize = uint64_t(1) << (32-kBitsPerStellarSquare);
+    gInterstellarState->mStepSize = uint32_t(1) << kBitsPerStellarSquare;
     gInterstellarState->mLevel = 0;
     gInterstellarState->mLastLevel = 0;
     gInterstellarState->mLastState = nullptr;
@@ -162,7 +164,7 @@ int main(int argc, char** argv)
                                 fontSheetPixels, 16, 22, 0, 0, true);
     gInterplanetaryState->mInfoPane =
         new SDLCharGraphicsPane(kInfoColumns, kInfoRows, 14, 16, 2, 2, 
-                                fontSheetPixels2, 16, 22, 500, 0, false);
+                                fontSheetPixels2, 16, 22, 512, 0, false);
     gInterplanetaryState->mStarSystem = nullptr;
     gInterplanetaryState->mPlanet = nullptr;
     gInterplanetaryState->mX = 0;
@@ -176,12 +178,12 @@ int main(int argc, char** argv)
     gPlanetaryState->mMapPane = nullptr;
     gPlanetaryState->mInfoPane =
         new SDLCharGraphicsPane(kInfoColumns, kInfoRows, 14, 16, 2, 2, 
-                                fontSheetPixels2, 16, 22, 500, 0, false);
+                                fontSheetPixels2, 16, 22, 512, 0, false);
     gPlanetaryState->mStarSystem = nullptr;
     gPlanetaryState->mPlanet = nullptr;
     gPlanetaryState->mX = 0;
     gPlanetaryState->mY = 0;
-    gPlanetaryState->mStepSize = uint64_t(1) << 21; // Max 2^26 meters, divided into 2^5 steps
+    gPlanetaryState->mStepSize = 1 << kMaxPlanetaryLevel;
     gPlanetaryState->mLevel = 0;
     gPlanetaryState->mLastLevel = 0;
     gPlanetaryState->mLastState = nullptr;
@@ -189,23 +191,23 @@ int main(int argc, char** argv)
     
     gCurrentState = gInterstellarState;
 
-    gInterstellarState->mX = uint64_t(1312) << 25;
-    gInterstellarState->mY = (uint64_t(549755731952) << 25) + (16 << 25);
-    UpdateGraphics(charGraphics, win);//, gCurrentState);
+    gInterstellarState->mX = gOrigin;
+    gInterstellarState->mY = gOrigin;
+    UpdateGraphics(charGraphics, win);
 
     SDL_Event sdlEvent;
     do {
         gCurrentState->mLastState = gCurrentState;
         if (0 != SDL_PollEvent(&sdlEvent)) {
             if (SDL_KEYDOWN == sdlEvent.type) {
-                /*gCurrentState =*/ HandleKeyDown(sdlEvent, win, charGraphics);//, gCurrentState);
+                HandleKeyDown(sdlEvent, win, charGraphics);
             }
             else if (SDL_WINDOWEVENT == sdlEvent.type &&
                      (SDL_WINDOWEVENT_EXPOSED == sdlEvent.window.event ||
                       SDL_WINDOWEVENT_MAXIMIZED == sdlEvent.window.event ||
                       SDL_WINDOWEVENT_RESTORED == sdlEvent.window.event ||
                       SDL_WINDOWEVENT_FOCUS_GAINED == sdlEvent.window.event)) {
-                UpdateGraphics(charGraphics, win);//, gCurrentState);
+                UpdateGraphics(charGraphics, win);
             }
         }
     }
@@ -224,13 +226,11 @@ int main(int argc, char** argv)
 }
 
 
-//GameState* 
-void HandleKeyDown(SDL_Event& sdlEvent, SDL_Window* win, SDLCharGraphics& charGraphics)//,
-                         //GameState* state)
+void HandleKeyDown(SDL_Event& sdlEvent, SDL_Window* win, SDLCharGraphics& charGraphics)
 {
-    uint64_t d = (gCurrentState->mLevel > 0) ?
-                 gCurrentState->mStepSize <<  gCurrentState->mLevel :
-                 gCurrentState->mStepSize >> -gCurrentState->mLevel;
+    uint32_t d = (gCurrentState->mLevel > 0) ?
+                 gCurrentState->mStepSize >>  gCurrentState->mLevel :
+                 gCurrentState->mStepSize << -gCurrentState->mLevel;
     gCurrentState->mLastLevel = gCurrentState->mLevel;
     GameState* nextState = gCurrentState;
     bool updateGraphics = true;
@@ -288,8 +288,8 @@ void HandleKeyDown(SDL_Event& sdlEvent, SDL_Window* win, SDLCharGraphics& charGr
                 nextState->mX = 0;
                 nextState->mY = 0;
             }
-            else {
-                gCurrentState->mLevel--;
+            else if (gCurrentState->mLevel < kMaxPlanetaryLevel) {
+                gCurrentState->mLevel++;
             }
         }
         break;
@@ -301,7 +301,7 @@ void HandleKeyDown(SDL_Event& sdlEvent, SDL_Window* win, SDLCharGraphics& charGr
                     nextState = gInterplanetaryState;
                     nextState->mLastState = gCurrentState;
                 } else {
-                    gCurrentState->mLevel++;
+                    gCurrentState->mLevel--;
                 }
             }
             else if (GameState::kInterplanetary == gCurrentState->mID) {
@@ -318,10 +318,9 @@ void HandleKeyDown(SDL_Event& sdlEvent, SDL_Window* win, SDLCharGraphics& charGr
     
     if (updateGraphics) {
         gCurrentState = nextState;
-        UpdateGraphics(charGraphics, win);//, nextState);
+        UpdateGraphics(charGraphics, win);
     }
     gCurrentState = (SDLK_END == sdlEvent.key.keysym.sym) ? nullptr : gCurrentState;
-    //return nextState;
 }
     
 
@@ -542,7 +541,7 @@ unsigned PlanetSymbolRGB(Planet* planet, StarSystem* starSystem)
     else if (planet->mFrostCover > 0.5) {
         return 0x00bfbfbf;
     }
-    else if (planet->mHydCover > 0.5) {
+    else if (planet->mHydCover > 0.25) {
         return 0x003636ff;
     }
     else {
@@ -550,22 +549,11 @@ unsigned PlanetSymbolRGB(Planet* planet, StarSystem* starSystem)
     }
 }
 
-/*
-vector<unsigned> PlanetPalette(uint64_t seed, unsigned size)
-{
-    vector<unsigned> result;
-    unsigned i = 0;
-    for ( ; i < size; i+=16) {
-        
-    }
-    return result;
-}
-*/
 
-void FormatInfo(unsigned* buffer, uint64_t posX, uint64_t posY, StarSystem* starSystem)
+void FormatInfo(unsigned* buffer, uint32_t posX, uint32_t posY, StarSystem* starSystem)
 {
     char line[32];
-    sprintf(line, "%012lu x %012lu", posX >> 25, posY >> 25);
+    sprintf(line, "%010u x %010u", posX, posY);
     CopyStrToIntBuffer(buffer, line, kInfoColumns);
     
     if (starSystem != nullptr) {
@@ -588,382 +576,204 @@ void FormatInfo(unsigned* buffer, uint64_t posX, uint64_t posY, StarSystem* star
 }
 
 
+// Gives a value, the partial power series sum of which equals 1
+// i.e. returns x such that x + x/2 + ... + x/2^(n-1) = 1
+inline float UnityFirstTerm(unsigned numTerms)
+{
+    return float(1 << (numTerms-1)) / float((1 << numTerms) - 1);
+}
+
+
 void PaintTerrain(SDL_Window* w)
 {
-    int terrainCols = 500;
-    int terrainRows = 250;//(gCurrentState->mLevel == 0) ? 250 : 500;
-    if (gPlanetaryState->mLastState != gPlanetaryState ||
-        gPlanetaryState->mLastLevel != gPlanetaryState->mLevel) {
-        uint64_t paramSeed = 
-            NoiseFunction1(uint64_t(fmod(gCurrentPlanet->mSemimajorAxis, 1.0) * 4294967296.0));
-//printf("%lu ", paramSeed);
-        double a = fmod(double(paramSeed >> 13) / 16777216.0, 1.0);
-//printf"%lf ", double(paramSeed >> 13) / 16777216.0);
+    vector<float> analysisBuffer;
+    vector<uint32_t> warpXBuffer;
+    vector<uint32_t> warpYBuffer;
+    vector<float> multiBuffer;
+    vector<float> powerBuffer;
+    const uint32_t terrainColsBits = 11;
+    const uint32_t terrainScaleBits = terrainColsBits - 2;
+    uint32_t terrainCols = 1 << terrainColsBits;
+    uint32_t terrainRows = 1 << (terrainColsBits-1);
+    float terrainScale = float(1 << terrainScaleBits);
+    if (gPlanetaryState->mLastState != gPlanetaryState) {
+        uint32_t paramSeed = 
+            NoiseFunction1(uint32_t(gCurrentPlanet->mSemimajorAxis * float(uint64_t(1)<<32)));
+        uint32_t planetx = (paramSeed >> terrainScaleBits) << terrainScaleBits;
         paramSeed = NoiseFunction1(paramSeed);
-        double b = fmod(double(paramSeed >> 13) / 16777216.0, 1.0);
+        uint32_t planety = paramSeed;
         paramSeed = NoiseFunction1(paramSeed);
-        // If c or d < 0.5 or so, the terrain takes on a somewhat artificial quality.
-        double c = fmod(double(paramSeed >> 13) / 16777216.0, 1.0) * 4.0 + 0.5;
+        uint32_t warpxx = (paramSeed >> terrainScaleBits) << terrainScaleBits;
         paramSeed = NoiseFunction1(paramSeed);
-        double d = fmod(double(paramSeed >> 13) / 16777216.0, 1.0) * 4.0 + 0.5;
-        double curveAtZero = -b * pow(a, c) + (1.0-b) * pow(a, d);
-        double curveMinimum = 0.0;
-        // Ignore the optimum if it occurs at x < 0
-        if ((-pow((b*c / ((1.0-b)*d)), 1.0/(d-c)) + a) / (a+1.0) >= 0.0) {
-            double curveAtOptimum = pow(b*c / ((1.0-b)*d), c/(d-c)) * (-b + b*c/d);
-            curveMinimum = min(curveMinimum, curveAtOptimum);
-        }
-        curveMinimum = min(curveMinimum, curveAtZero);
-printf("%.4lf %.4lf %.4lf %.4lf %.4lf\n", a, b, c, d, curveMinimum);
-        double curveNormalizer = 1.0 / (1.0 - curveMinimum);
+        uint32_t warpxy = paramSeed;
         paramSeed = NoiseFunction1(paramSeed);
-        // 67108864 = 2^26 and 26 = 52/2 and 52 is the number of bits in the
-        // mantissa of double precision floating point. Also 52+12 = 64.
-        double planetx = double(paramSeed >> 12) / 67108864.0 + 67108865.0;
+        uint32_t warpyx = (paramSeed >> terrainScaleBits) << terrainScaleBits;
         paramSeed = NoiseFunction1(paramSeed);
-        double planety = double(paramSeed >> 12) / 67108864.0 + 67108865.0;
+        uint32_t warpyy = paramSeed;
         paramSeed = NoiseFunction1(paramSeed);
-        double planetz = double(paramSeed >> 12) / 67108864.0 + 67108865.0;
+        uint32_t multix = (paramSeed >> terrainScaleBits) << terrainScaleBits;
         paramSeed = NoiseFunction1(paramSeed);
-//printf("%.4lf %.4lf %.4lf\n", planetx, planety, planetz);
-        vector<float> analysisBuffer;
-        unsigned numLayers = 10;
-        double coordScales[20];
-        coordScales[0] = 0.3;
-        for (unsigned n = 1; n < numLayers; ++n) {
-            coordScales[n] = coordScales[n-1] *
-                             (fmod(coordScales[n-1]*1.6473489695, 2.2) + 1.1);
-        }
-        double warpScale = 0.75;
-        double warpStrength = fmod(double(paramSeed >> 12) / 65536.0, 1.0) * 2.5;
-        for (int j = 0; j < terrainRows; ++j) {
-            double lat = 
-                kPI * (0.5 - double(j) / 250 + 
-                       (gCurrentState->mY & 31) / 32.0) /
-                (1 << -gCurrentState->mLevel);
-            for (int i = 0; i < terrainCols; ++i) {
-                unsigned index = j*terrainCols + i;
-                double lon = 
-                    kPI * (2.0*i/terrainCols - 1.0 + 
-                           (gCurrentState->mX & 31) / 16.0) /
-                    (1 << -gCurrentState->mLevel);
-                double heightScale = 1.0;
-                double coslon = cos(lon);
-                double sinlon = sin(lon);
-                double t = 0.0;
-                double x = coslon + planetx - 134217729.0;
-                double y = sinlon + planety - 134217729.0;
-                double z = lat + planetz - 134217729.0;
-                double beta = 0.25 + 0.3 * PerlinNoise(x, y, z);
-                double heightNormalizer = (1.0 - beta) / (1.0 - pow(beta, numLayers));
-                double warp = (PerlinNoise(warpScale*coslon + planetx + 1000.0,
-                                           warpScale*sinlon + planety + 1000.0, 
-                                           warpScale*lat + planetz + 1000.0) - 0.5) * 2.0;
-                warp *= warp * warpStrength;
-                for (unsigned n = 0; n < numLayers; ++n) {
-                    double zscale = coordScales[n];
-                    x = zscale * coslon;
-                    y = zscale * sinlon;
-                    z = coordScales[n] * lat;
-                    double w = 1.0 + warp / coordScales[n];
-                    double h = PerlinNoise(x*w+planetx, y*w+planety, z*w+planetz);
-                    double q = h * a + h - a; // [0,1) ==> [-a,1)
-                    // [-a,1) ==> [-ba^c + (1-b)a^d, 1)
-                    double absq = (q < 0.0) ? -q : q;
-                    double logq = log(absq + 1.0e-300);
-                    double qToTheD = exp(logq * d);
-                    double r = b * (exp(logq*c) * kFsgn(q) - qToTheD) + qToTheD;
-                    // [-ba^c + (1-b)a^d, 1) ==> [0,1)
-                    double s = (r - curveMinimum) * curveNormalizer;
-                    s = (0 == (paramSeed & (0x1 << n))) ? s : 1.0-s;
-                    t += s * heightScale;
-                    heightScale *= beta;
+        uint32_t multiy = paramSeed;
+        float warpStrength = float(paramSeed) / float(uint64_t(1)<<32) * 1.2f + 0.15f;
+        float scalePerOctave = 0.5f;
+        unsigned numOctaves = 1;
+        float initOctaveScale = warpStrength * UnityFirstTerm(numOctaves);
+        for (uint32_t j = 0; j < terrainRows; ++j) {
+            for (uint32_t i = 0; i < terrainCols; ++i) {
+                uint32_t xbufval = 0;
+                uint32_t ybufval = 0;
+                float octaveScale = initOctaveScale;
+                for (uint32_t n = 0; n < numOctaves; ++n) {
+                    float wx = PerlinNoiseXPeriodic((i<<n)+warpxx, (j<<n)+warpxy, 
+                                                    terrainScaleBits, 
+                                                    warpxx, terrainColsBits+n);
+                    float wy = PerlinNoiseXPeriodic((i<<n)+warpyx, (j<<n)+warpyy, 
+                                                    terrainScaleBits, 
+                                                    warpyx, terrainColsBits+n);
+                    wx *= wx;
+                    wy *= wy;  // Yes, this transformation
+                    wx -= 0.5; // is asymmetric around 0
+                    wy -= 0.5;
+                    float totalScale = 2.0f * octaveScale * terrainScale * warpStrength;
+                    xbufval += uint32_t(wx * totalScale + 0.5);
+                    ybufval += uint32_t(wy * totalScale + 0.5);
+                    octaveScale *= scalePerOctave;
                 }
-//printf("%02d %02d %.4lf %.4lf %.4lf %.4lf %.4lf %.4lf\n", i, j, lat, lon, x, y, z, h);
-                gTerrainBuffer[index] = float(t * heightNormalizer);
-                analysisBuffer.push_back(float(t * heightNormalizer));
+                warpXBuffer.push_back(xbufval);
+                warpYBuffer.push_back(ybufval);
+            }
+        }
+        scalePerOctave = 0.5f;
+        numOctaves = 1;
+        initOctaveScale = UnityFirstTerm(numOctaves);
+        for (uint32_t j = 0; j < terrainRows; ++j) {
+            for (uint32_t i = 0; i < terrainCols; ++i) {
+                unsigned index = j*terrainCols + i;
+                float h = 0.0f;
+                float octaveScale = initOctaveScale;
+                for (uint32_t n = 0; n < numOctaves; ++n) {
+                    h += PerlinNoiseXPeriodic(((i<<n)+warpXBuffer[index]) + planetx, 
+                                              ((j<<n)+warpYBuffer[index]) + planety, 
+                                              terrainScaleBits, planetx, terrainColsBits + n) *
+                         octaveScale;
+                    octaveScale *= scalePerOctave;
+                }
+                // This modulates the scalePerOctave of the terrain. Range 0.35-0.7
+                multiBuffer.push_back(h*0.35f + 0.35f);
+            }
+        }
+        for (uint32_t j = 0; j < terrainRows; ++j) {
+            for (uint32_t i = 0; i < terrainCols; ++i) {
+                unsigned index = j*terrainCols + i;
+                float h = 0.0f;
+                float octaveScale = initOctaveScale;
+                for (uint32_t n = 0; n < numOctaves; ++n) {
+                    h += PerlinNoiseXPeriodic(((i<<n)+warpXBuffer[index]) + planetx, 
+                                              ((j<<n)+warpYBuffer[index]) + planety, 
+                                              terrainScaleBits, planetx, terrainColsBits + n) *
+                         octaveScale;
+                    octaveScale *= scalePerOctave;
+                }
+                powerBuffer.push_back(h);
+            }
+        }
+        numOctaves = terrainColsBits - 1;
+        initOctaveScale = UnityFirstTerm(numOctaves);
+        for (uint32_t j = 0; j < terrainRows; ++j) {
+            for (uint32_t i = 0; i < terrainCols; ++i) {
+                unsigned index = j*terrainCols + i;
+                float h = 0.0f;
+                float octaveScale = initOctaveScale;
+                scalePerOctave = multiBuffer[index];
+                float power = powerBuffer[index];
+                for (uint32_t n = 0; n < numOctaves; ++n) {
+                    float oct = PerlinNoiseXPeriodic((i<<n) + warpXBuffer[index] + planetx, 
+                                                     (j<<n) + warpYBuffer[index] + planety, 
+                                                     terrainScaleBits, planetx, 
+                                                     terrainColsBits + n);
+                    float octcubed = oct * oct * oct;
+                    oct = (1.0f-power) * oct + power * octcubed;
+                    oct *= octaveScale;
+                    h += oct;
+                    octaveScale *= scalePerOctave;
+                }
+                gTerrainBuffer[index] = h;
+                analysisBuffer.push_back(h);
             }
         }
         sort(analysisBuffer.begin(), analysisBuffer.end());
         gWaterline = analysisBuffer[unsigned(floor((analysisBuffer.size()-1) *
-                                                   gCurrentPlanet->mHydCover))];
+                                                   sqrt(gCurrentPlanet->mHydCover)))];
     }
 
     SDL_Surface* surf = SDL_GetWindowSurface(w);
     unsigned* pixelsPtr = ((unsigned*)surf->pixels);
 
-    for (int j = 0; j < 500; ++j) {
-        for (int i = 0; i < 500; ++i) {
-            pixelsPtr[j * surf->w + i] = 0x00000000;
-        }
-    }
-    
-    int signedX = int(gCurrentState->mX & 0xffffffff);
-    int signedY = int(gCurrentState->mY & 0xffffffff);
-    int sjbeg = (500-terrainRows) / 2;
-    int sjend = sjbeg + terrainRows;
-    int tjbeg = 0;
-    int tjend = terrainRows;
-    int tibeg = 0;
-    int tiend = terrainCols;
-    int sibeg = 0;
-    int siend = terrainCols;
-    // 500/2^26 = 0.000007450580596923828125
-    double moveScale = 7.450580596923828125e-6 * (1 << -gCurrentState->mLevel);
-    int cropX = int(floor(signedX * moveScale + 0.5));
-    int cropY = int(floor(signedY * moveScale + 0.5));
-
-    if (signedY < 0) {
-        tjbeg -= cropY;
-        sjend += cropY;
-    }
-    else {
-        sjbeg += cropY;
-        tjend -= cropY;
-    }
-    if (signedX < 0) {
-        sibeg -= cropX;
-        tiend += cropX;
-    }
-    else {
-        tibeg += cropX;
-        siend -= cropX;
-    }
-    
-    for (int j = sjbeg; j < sjend; ++j) {
-        for (int i = sibeg; i < siend; ++i) {
-            int index = (j-sjbeg+tjbeg) * 500 + i-sibeg+tibeg;
-            int adjIndex = (j-sjbeg+tjbeg) * 500 + (i-sibeg+tibeg+1) % 500;
-            if (gTerrainBuffer[index] > gWaterline) {
-                double diff = floor(5000.0 * (gTerrainBuffer[index] - 
-                                              gTerrainBuffer[adjIndex])) + 64.0;
-                unsigned s = unsigned((diff < 60.0) ? 32.0 : diff);
+    int maxIndex = 1 << (2*terrainColsBits - 1);
+    for (int j = 0; j < 512; ++j) {
+        for (int i = 0; i < 512; ++i) {
+            // j: [0, 128, 256, 384, 512] ==> 
+            // [rows*3/2, rows, rows/2, 0, -rows/2]  {level 0}
+            // [rows, rows*3/4, rows/2, rows/4, 0]   {level 1}
+            // [rows*3/4, rows*5/8, rows/2, rows*3/8, rows/4]  {level 2}
+            // rows/2 + [rows>>level, rows/2>>level, 0, -rows/2>>level, -rows>>level] =
+            // rows/2 + rows>>level + 
+            //  [0, -rows/2>>level, -rows>>level, -rows*3/2>>level, -rows*2>>level] =
+            // rows/2 + rows>>level - ((rows*j)>>8)>>level
+            int index = ((((i<<(terrainColsBits-9))>>gCurrentState->mLevel)-((terrainCols/2)>>gCurrentState->mLevel)+gCurrentState->mX) & 
+                         (terrainCols-1)) + 
+                        (((terrainRows>>1) + (terrainRows>>gCurrentState->mLevel) - 
+                          (((terrainRows*j)>>8)>>gCurrentState->mLevel) + gCurrentState->mY) << 
+                         terrainColsBits);
+            if (index < 0 || index >= maxIndex) {
+                pixelsPtr[j * surf->w + i] = 0;
+            }
+            else if (gTerrainBuffer[index] > gWaterline) {
+                unsigned s = gTerrainBuffer[index] * 256.0;
+                s = (s < 0x80000000) ? s : 0;
                 s = (s <= 255) ? s : 255;
-                pixelsPtr[j * surf->w + i] = 0x00010101 * s;
+                pixelsPtr[j * surf->w + i] = 0x00010000 * s;
+                pixelsPtr[j * surf->w + i] += 0x00000100 * (s>>1);
+                pixelsPtr[j * surf->w + i] += 0x00000001 * (s>>2);
             }
             else {
-                pixelsPtr[j * surf->w + i] = 64;
+                pixelsPtr[j * surf->w + i] = 0x00004080;
             }
         }
     }
 }
 
-/*
-void PaintTerrain(SDL_Window* w)
-{
-    static uint64_t lastX = 0;
-    static uint64_t lastY = 0;
-    
-    SDL_Surface* surf = SDL_GetWindowSurface(w);
 
-    unsigned* pixelsPtr = ((unsigned*)surf->pixels);
-    if (gCurrentState->mLevel == 0) {
-        for (int j = 0; j < 125; ++j) {
-            for (int i = 0; i < 500; ++i) {
-                pixelsPtr[j * surf->w + i] = 0x00000000;
-            }
-        }
-    }
-    // f(x)  = b |q|^c sgn(q) + (1-b) |q|^d
-    //       = b |ax-a+x|^c sgn(q) + (1-b) |ax-a+x|^d
-    // df/dx = dq/dx (bc|q|^(c-1) d|q|/dq sgn(q) + b|q|^c delta(q) + 
-    //                (1-b) d|q|^(d-1) d|q|/dq)
-    //       = (a+1) (bc|q|^(c-1) sgn(q) sgn(q) + b|q|^c delta(q) + 
-    //                (1-b) d|q|^(d-1) sgn(q))
-    //       = (a+1) (bc|q|^(c-1) + (1-b) d|q|^(d-1) sgn(q))             q != 0
-    // Find the minimum:
-    // 0     = (a+1) (bc|q|^(c-1) + (1-b) d|q|^(d-1) sgn(q))             q != 0
-    // 0     = bc + (1-b) d|q|^(d-c) sgn(q)
-    // -bc / (1-b)d = |q|^(d-c) sgn(q)
-    // The left is negative so sgn(q) must be negative
-    // bc / (1-b)d = |q|^(d-c)
-    // (bc / (1-b)d)^(1/(d-c)) = |q|
-    // ±|-bc / (1-b)d|^(1/(d-c)) = qmin
-    //                           = ax-a+x
-    // (±|-bc / (1-b)d|^(1/(d-c)) + a) / (a+1) = xmin
-    // We want the root with the negative sign because sgn(q) is negative
-    // f(qmin) = b  |-|-bc / (1-b)d|^(1/(d-c))|^c sgn(-|-bc / (1-b)d|^(1/(d-c))) + 
-    //        (1-b) |-|-bc / (1-b)d|^(1/(d-c))|^d
-    //         = -b ||-bc / (1-b)d|^(1/(d-c))|^c + (1-b) ||-bc / (1-b)d|^(1/(d-c))|^d
-    //         = -b ||-bc / (1-b)d|^(1/(d-c))|^c + (1-b) ||-bc / (1-b)d|^(1/(d-c))|^d
-    //         = -b |-bc / (1-b)d|^(c/(d-c)) + (1-b) |-bc / (1-b)d|^(d/(d-c))
-    //         = |-bc / (1-b)d|^(c/(d-c)) 
-    //           (-b + (1-b) |-bc / (1-b)d|^(d/(d-c)) |-bc / (1-b)d|^(-c/(d-c)))
-    //         = |-bc / (1-b)d|^(c/(d-c)) (-b + (1-b) |-bc / (1-b)d|^((d-c)/(d-c)))
-    //         = |-bc / (1-b)d|^(c/(d-c)) (-b + (1-b) |-bc / (1-b)d|)
-    // 1-b is non-negative so we can do this
-    //         = |-bc / (1-b)d|^(c/(d-c)) (-b + |-bc/d|)
-    // b, c, and d are all non-negative, so...
-    //         = (bc / (1-b)d)^(c/(d-c)) (-b + bc/d)
-    // So we'll compare the values at xmin, q=0 <==> x=(q+a)/(1+a), x=0, x=1.
-    // The value at q=0 is 0.
-    // f(0) = -ba^c + (1-b) a^d
-    // f(1) = 1
-    // 1 > 0 so we can disregard value at x=1
-    uint64_t paramSeed = 
-        NoiseFunction1(uint64_t(fmod(gCurrentPlanet->mSemimajorAxis, 1.0) * 4294967296.0));
-//printf("%lu ", paramSeed);
-    double a = fmod(double(paramSeed >> 13) / 16777216.0, 1.0);
-//printf("%lf ", double(paramSeed >> 13) / 16777216.0);
-    paramSeed = NoiseFunction1(paramSeed);
-    double b = fmod(double(paramSeed >> 13) / 16777216.0, 1.0);
-    paramSeed = NoiseFunction1(paramSeed);
-    // If c or d < 0.5 or so, the terrain takes on a somewhat artificial quality.
-    double c = fmod(double(paramSeed >> 13) / 16777216.0, 1.0) * 4.0 + 0.5;
-    paramSeed = NoiseFunction1(paramSeed);
-    double d = fmod(double(paramSeed >> 13) / 16777216.0, 1.0) * 4.0 + 0.5;
-    double curveAtZero = -b * pow(a, c) + (1.0-b) * pow(a, d);
-    double curveMinimum = 0.0;
-    // Ignore the optimum if it occurs at x < 0
-    if ((-pow((b*c / ((1.0-b)*d)), 1.0/(d-c)) + a) / (a+1.0) >= 0.0) {
-        double curveAtOptimum = pow(b*c / ((1.0-b)*d), c/(d-c)) * (-b + b*c/d);
-        curveMinimum = min(curveMinimum, curveAtOptimum);
-    }
-    curveMinimum = min(curveMinimum, curveAtZero);
-//printf("%.4lf %.4lf %.4lf %.4lf %.4lf\n", a, b, c, d, curveMinimum);
-    double curveNormalizer = 1.0 / (1.0 - curveMinimum);
-    vector<float> analysisBuffer;
-    paramSeed = NoiseFunction1(paramSeed);
-    // 67108864 = 2^26 and 26 = 52/2 and 52 is the number of bits in the
-    // mantissa of double precision floating point. Also 52+12 = 64.
-    double planetx = double(paramSeed >> 12) / 67108864.0 + 67108865.0;
-    paramSeed = NoiseFunction1(paramSeed);
-    double planety = double(paramSeed >> 12) / 67108864.0 + 67108865.0;
-    paramSeed = NoiseFunction1(paramSeed);
-    double planetz = double(paramSeed >> 12) / 67108864.0 + 67108865.0;
-    paramSeed = NoiseFunction1(paramSeed);
-//printf("%.4lf %.4lf %.4lf\n", planetx, planety, planetz);
-    unsigned numLayers = 10;
-    double coordScales[20];
-    coordScales[0] = 1.0;
-    for (unsigned n = 1; n < numLayers; ++n) {
-        coordScales[n] = coordScales[n-1] *
-                         (fmod(coordScales[n-1]*1.6473489695, 2.2) + 1.1);
-    }
-    double warpScale = 0.75;
-    double warpStrength = fmod(double(paramSeed >> 12) / 65536.0, 1.0) * 2.5;
-    int jbeg = (0 == gCurrentState->mLevel) ? 125 :   0;
-    int jend = (0 == gCurrentState->mLevel) ? 376 : 500;
-printf("%lu %lu\n", gCurrentState->mX, gCurrentState->mY);
-    for (int j = jbeg; j < jend; ++j) {
-        double lat = kPI * (0.5 / 126.0 * (250-j) + (gCurrentState->mY & 31) / 32.0) / 
-                     (1 << -gCurrentState->mLevel);
-        double coslat = cos(lat);
-        double sinlat = sin(lat);
-        for (int i = 0; i < 500; ++i) {
-            unsigned index = (j-jbeg)*500 + i;
-            double lon = kPI * (1.0 / 250.0 * (i-250) + (gCurrentState->mX & 31) / 16.0) / 
-                         (1 << -gCurrentState->mLevel);
-            double coordScale = 1.0;
-            double heightScale = 1.0;
-            double coslon = cos(lon);
-            double sinlon = sin(lon);
-            double t = 0.0;
-            double x = coslat*coslon + planetx - 134217729.0;
-            double y = coslat*sinlon + planety - 134217729.0;
-            double z = sinlat + planetz - 134217729.0;
-            double beta = 0.25 + 0.3 * PerlinNoise(x, y, z);
-            double heightNormalizer = (1.0 - beta) / (1.0 - pow(beta, numLayers));
-            double warp = (PerlinNoise(warpScale*coslat*coslon + planetx + 1000.0,
-                                       warpScale*coslat*sinlon + planety + 1000.0, 
-                                       warpScale*sinlat + planetz + 1000.0) - 0.5) * 2.0;
-            warp *= warp * warpStrength;
-            for (unsigned n = 0; n < numLayers; ++n) {
-                double zscale = coordScales[n] * coslat;
-                x = zscale * coslon;
-                y = zscale * sinlon;
-                z = coordScales[n] * sinlat;
-                double w = 1.0 + warp / coordScales[n];
-                double h = PerlinNoise(x*w+planetx, y*w+planety, z*w+planetz);
-                double q = h * a + h - a; // [0,1) ==> [-a,1)
-                // [-a,1) ==> [-ba^c + (1-b)a^d, 1)
-                double absq = (q < 0.0) ? -q : q;
-                double logq = log(absq + 1.0e-300);
-                double qToTheD = exp(logq * d);
-                double r = b * (exp(logq*c) * kFsgn(q) - qToTheD) + qToTheD;
-                // [-ba^c + (1-b)a^d, 1) ==> [0,1)
-                double s = (r - curveMinimum) * curveNormalizer;
-                s = (0 == (paramSeed & (0x1 << n))) ? s : 1.0-s;
-                t += s * heightScale;
-                heightScale *= beta;
-            }
-//printf("%02d %02d %.4lf %.4lf %.4lf %.4lf %.4lf %.4lf\n", i, j, lat, lon, x, y, z, h);
-            gTerrainBuffer[index] = float(t * heightNormalizer);
-            analysisBuffer.push_back(float(t * heightNormalizer));
-        }
-    }
-//printf("%.4lf %.4lf %.4lf %.4lf %.4lf %.4lf\n", minh, maxh, minr, maxr, mins, maxs);
-    sort(analysisBuffer.begin(), analysisBuffer.end());
-    gWaterline = analysisBuffer[unsigned(floor((analysisBuffer.size()-1) *
-                                               gCurrentPlanet->mHydCover))];
-//printf("%.4lf %.4lf %.4f\n", gCurrentPlanet->mNormedHydDepth, gCurrentPlanet->mHydCover, 
-//                             waterline);
-    for (int j = jbeg; j < jend; ++j) {
-        for (int i = 0; i < 500; ++i) {
-            unsigned index = (j-jbeg)*500 + i;
-            unsigned adjIndex = (j-jbeg)*500 + (i+1)%500;
-            if (gTerrainBuffer[index] > gWaterline) {
-                double diff = floor(5000.0 * (gTerrainBuffer[index] - 
-                                              gTerrainBuffer[adjIndex])) + 64.0;
-                unsigned s = unsigned((diff < 60.0) ? 32.0 : diff);
-                s = (s <= 255) ? s : 255;
-                pixelsPtr[j * surf->w + i] = 0x00010101 * s;
-                //    0x00010101 * unsigned(floor(terrainBuffer[index]*256.0));
-            }
-            else {
-                pixelsPtr[j * surf->w + i] = 64;
-            }
-        }
-    }
-    if (gCurrentState->mLevel == 0) {
-        for (int j = 376; j < 500; ++j) {
-            for (int i = 0; i < 500; ++i) {
-                pixelsPtr[j * surf->w + i] = 0x00000000;
-            }
-        }
-    }
-}
-*/
-
-int UpdateGraphics(SDLCharGraphics& cg, SDL_Window* w)//, GameState* state)
+int UpdateGraphics(SDLCharGraphics& cg, SDL_Window* w)
 {
-printf("UpdateGraphics: state %u\n", gCurrentState->mID);
     SDL_Surface* surf = SDL_GetWindowSurface(w);
     
-    // Determine where in space we are
-    // Determine contents of that region of space and put them in a buffer for cg
-    uint32_t posXInt = (uint32_t)(gCurrentState->mX >> 32);
-    uint32_t posXFrac = (uint32_t)(gCurrentState->mX & 0x00000000ffffffff);
-    uint32_t posYInt = (uint32_t)(gCurrentState->mY >> 32);
-    uint32_t posYFrac = (uint32_t)(gCurrentState->mY & 0x00000000ffffffff);
     if (GameState::kInterstellar == gCurrentState->mID) {
         gSystemUnderReticle = nullptr;
-        double step = 1.0 / (double)(1 << kBitsPerStellarSquare);
+        unsigned halfstep = gInterstellarState->mStepSize >> 1;
         for (int j = -12; j < 13; j++) {
             for (int i = -12; i < 13; i++) {
-                double x = (double)posXInt + (double)posXFrac/4294967296.0 + i*step;
-                double y = (double)posYInt + (double)posYFrac/4294967296.0 + j*step;
                 // Adding half a step so the value isn't exactly 0.5 at integer x and y.
-                // The amount added mustn't result in any sort of truncation. The sum
-                // must be exactly representable in double precision floats even when
-                // posXInt and posYInt are large. Otherwise you'll get weird behavior
-                // near the wraparound between 2^32 and 0.
-                double noiseValue = PerlinNoise(x+step*0.5, y+step*0.5);
-                double maxNoiseValue = 1.0 - 1.0/(double)((uint64_t)1 << 53);
+                float noiseValue = 
+                    PerlinNoise(gCurrentState->mX + (unsigned(i) << kBitsPerStellarSquare) +
+                                halfstep, 
+                                gCurrentState->mY + (unsigned(j) << kBitsPerStellarSquare) +
+                                halfstep, 6);
+                float maxNoiseValue = 1.0f - 1.0f/float(1 << 24);
                 noiseValue = (noiseValue < 0.0) ? 0.0 :
                              ((noiseValue > maxNoiseValue) ? maxNoiseValue : noiseValue);
-                double starNoise = noiseValue * ((uint64_t)1 << 43);
-                double starFrac = starNoise - floor(starNoise);
-                double starFrequency = (63.0 * pow(noiseValue, 8.0) + 1) / 192.0;
+                float starNoise = noiseValue * (1 << 11);
+                float starFrac = starNoise - floor(starNoise);
+                float starFrequency = (63.0f * pow(noiseValue, 8.0f) + 1.0f) / 192.0f;
                 int index = (12-j)*25 + i + 12;
                 cgBuffer[index] = 32;
                 fgClrBuffer[index] = 0xffffff;
-                bgClrBuffer[index] = unsigned(noiseValue * 256.0) | (32 << 16);
+                bgClrBuffer[index] = unsigned(noiseValue * 256.0f) | (32 << 16);
                 StarSystem* tempSystem = nullptr;
                 bool center = ((i == 0) && (j == 0));
                 if (starFrac <= starFrequency) {
-                    uint64_t fpNoiseValue = ToFixedPoint12p52(noiseValue);
-                    tempSystem = new StarSystem(unsigned(fpNoiseValue & 0xffffffff), !center);
+                    uint32_t fpNoiseValue = ToFixedPoint9p23(noiseValue);
+                    tempSystem = new StarSystem(fpNoiseValue, !center);
                     cgBuffer[index] = LumToSymbol(tempSystem->mStar->mLuminosity);
                     fgClrBuffer[index] = TempToRGB(tempSystem->mStar->mTemperature, 0.5);
                     if (center) {
@@ -1014,17 +824,16 @@ printf("UpdateGraphics: state %u\n", gCurrentState->mID);
                 }
             }
         }
-//        double logSARange = 1.0;
         double orbitScale = 1.0;
         if (numPlanets > 1) {
             orbitScale = max(1.01 / log(minRatio), 90.0 / log(maxSA/minSA));
         }
-        vector<uint64_t> planetYs;
-        uint64_t minY = -1; // It'll underflow to the max unsigned
+        vector<uint32_t> planetYs;
+        uint32_t minY = -1; // It'll underflow to the max unsigned
         for (unsigned i = 0; i < numPlanets; ++i) {
             Planet* p = gCurrentSystem->mPlanets[i];
-            uint64_t y = uint64_t(gOrigin - 5) - 
-                         uint64_t(floor(orbitScale * (log(p->mSemimajorAxis)-log(minSA))));
+            uint32_t y = uint32_t(gOrigin - 5) - 
+                         uint32_t(floor(orbitScale * (log(p->mSemimajorAxis)-log(minSA))));
             planetYs.push_back(y);
             if (y < minY) {
                 minY = y;
@@ -1037,8 +846,8 @@ printf("UpdateGraphics: state %u\n", gCurrentState->mID);
             gCurrentState->mY = minY - 5;
         }
         // Sun
-        uint64_t screenX = -gCurrentState->mX + (gOrigin + 12);
-        uint64_t screenY =  gCurrentState->mY - (gOrigin - 12);
+        uint32_t screenX = -gCurrentState->mX + (gOrigin + 12);
+        uint32_t screenY =  gCurrentState->mY - (gOrigin - 12);
         if (screenX < 25 && screenY < 25) {
             unsigned index = screenX + 25 * screenY;
             cgBuffer[index] = 42;
@@ -1046,6 +855,7 @@ printf("UpdateGraphics: state %u\n", gCurrentState->mID);
             bgClrBuffer[index] = 0x00000000;
         }
         // Planets
+        int planetUnderReticle = -1;
         for (unsigned i = 0; i < planetYs.size(); ++i) {
             screenX = -gCurrentState->mX + (gOrigin + 12);
             screenY =  gCurrentState->mY - (planetYs[i] - 12);
@@ -1057,22 +867,31 @@ printf("UpdateGraphics: state %u\n", gCurrentState->mID);
                 bgClrBuffer[index] = 0x00000000;
                 if (screenX == 12 && screenY == 12) {
                     gCurrentPlanet = tempPlanet;
+                    planetUnderReticle = i;
                 }
             }
         }
         cg.WriteCharacters(gCurrentState->mMapPane, cgBuffer, fgClrBuffer, bgClrBuffer, 0, 0, 
                            kIPMapColumns, kIPMapRows);
+        FillColorBuffer(bgClrBuffer, kMaxColumns*kMaxRows, 0);
+        if (planetUnderReticle != -1) {
+            for (int i = 0; i < kInfoColumns; ++i) {
+                bgClrBuffer[(planetUnderReticle+2)*kInfoColumns + i] = 0x05005f;
+            }
+        }
+        cg.WriteCharacters(gInterstellarState->mInfoPane, nullptr, nullptr, bgClrBuffer, 
+                           0, 0, kInfoColumns, kInfoRows);
     }
     else {
         PaintTerrain(w);
     }
 
-//    unsigned const* pixelBuffer = cg.GetPixels();
     if (GameState::kPlanetary != gCurrentState->mID) {
         unsigned const* pixelBuffer = cg.GetPixels();
-        for (unsigned j = 0; j < 500; j++) {
-            for (unsigned i = 0; i < 1000; i++) {
-                ((unsigned*)surf->pixels)[j * surf->w + i] = pixelBuffer[j * 1000 + i];
+        for (unsigned j = 0; j < kMainWindowRows; j++) {
+            for (unsigned i = 0; i < kMainWindowCols; i++) {
+                ((unsigned*)surf->pixels)[j * surf->w + i] = 
+                    pixelBuffer[j * kMainWindowCols + i];
             }
         }
     }
@@ -1080,6 +899,152 @@ printf("UpdateGraphics: state %u\n", gCurrentState->mID);
     SDL_UpdateWindowSurface(w);
 
     return 0;
+}
+
+
+float PerlinNoise(uint32_t x, uint32_t y, unsigned fracbits)
+{
+    uint32_t xint = x >> fracbits;
+    uint32_t yint = y >> fracbits;
+    uint32_t xp1 = (x + (1 << fracbits)) >> fracbits;
+    uint32_t yp1 = (y + (1 << fracbits)) >> fracbits;
+    uint32_t ymod = yint * 1103515245 + 12345;
+    uint32_t yp1mod = yp1 * 1103515245 + 12345;
+    uint32_t ll = NoiseFunction1(xint ^ ymod);
+    uint32_t lr = NoiseFunction1( xp1 ^ ymod);
+    uint32_t ul = NoiseFunction1(xint ^ yp1mod);
+    uint32_t ur = NoiseFunction1( xp1 ^ yp1mod);
+    
+    // 23 bits in single precision floating point mantissa
+    // No point in keeping more
+    const float phaseNormalizer = 3.14159267f * 2.0f / 8388608.0f;
+    float llphase = float(ll & 0x007fffff) * phaseNormalizer;
+    float lrphase = float(lr & 0x007fffff) * phaseNormalizer;
+    float ulphase = float(ul & 0x007fffff) * phaseNormalizer;
+    float urphase = float(ur & 0x007fffff) * phaseNormalizer;
+
+    unsigned fracmask = (1 << fracbits) - 1;    
+    float fracNormalizer = 1.0f / float(fracmask);
+    float xfrac = float(x & fracmask) * fracNormalizer;
+    float yfrac = float(y & fracmask) * fracNormalizer;
+
+    float lldot =  xfrac      *cos(llphase) +  yfrac      *sin(llphase);
+    float lrdot = (xfrac-1.0f)*cos(lrphase) +  yfrac      *sin(lrphase);
+    float uldot =  xfrac      *cos(ulphase) + (yfrac-1.0f)*sin(ulphase);
+    float urdot = (xfrac-1.0f)*cos(urphase) + (yfrac-1.0f)*sin(urphase);
+    
+    float hermitex = Hermite(xfrac);
+    float hermitey = Hermite(yfrac);
+
+    float linterp = (1.0f-hermitex)*lldot + hermitex*lrdot;
+    float uinterp = (1.0f-hermitex)*uldot + hermitex*urdot;
+    float interp = (1.0f-hermitey)*linterp + hermitey*uinterp;
+
+    float result = interp * 0.70710678f + 0.5f;
+    return result;
+}
+
+
+#define kArccosPiOver8 0.9238795f
+#define kArcsinPiOver8 0.3826834f
+inline float GradDotProduct(unsigned n, float x, float y)
+{
+    switch (n)
+    {
+        case 0:
+        return kArccosPiOver8*x + kArcsinPiOver8*y;
+        break;
+        
+        case 1:
+        return kArccosPiOver8*y + kArcsinPiOver8*x;
+        break;
+        
+        case 2:
+        return kArccosPiOver8*x - kArcsinPiOver8*y;
+        break;
+        
+        case 3:
+        return kArccosPiOver8*y - kArcsinPiOver8*x;
+        break;
+      
+        case 4:
+        return -kArccosPiOver8*x + kArcsinPiOver8*y;
+        break;
+        
+        case 5:
+        return -kArccosPiOver8*y + kArcsinPiOver8*x;
+        break;
+        
+        case 6:
+        return -kArccosPiOver8*x - kArcsinPiOver8*y;
+        break;
+        
+        case 7:
+        return -kArccosPiOver8*y - kArcsinPiOver8*x;
+        break;
+                
+        default:
+        return 0;
+        break;
+    }
+}
+
+
+inline
+float PerlinNoiseXPeriodic(uint32_t x, uint32_t y, unsigned fracbits, 
+                           uint32_t xOrigin, unsigned periodbits)
+{
+    // Throw away last bits of xOrigin because it must be an integer
+    // with respect to this function's sense of fixed point arithmetic
+    xOrigin >>= fracbits;
+    xOrigin <<= fracbits;
+    
+    uint32_t periodMask = (1 << periodbits) - 1;
+     
+    x -= xOrigin;
+    uint32_t xp1 = x + (1 << fracbits);
+    x &= periodMask;
+    xp1 &= periodMask;
+    x += xOrigin;
+    xp1 += xOrigin;
+
+    uint32_t xint = x >> fracbits;
+    xp1 >>= fracbits;
+    uint32_t yint = y >> fracbits;
+    uint32_t ymod = yint * 1103515245 + 12345;
+    uint32_t ll = NoiseFunction1(xint ^  ymod);
+    uint32_t lr = NoiseFunction1(xp1  ^  ymod);
+    uint32_t ul = NoiseFunction1(xint ^ (ymod+1103515245));
+    uint32_t ur = NoiseFunction1(xp1  ^ (ymod+1103515245));
+    
+    uint32_t fracMask = (1 << fracbits) - 1;
+    float fracNormalizer = 1.0f / float(1 << fracbits);
+    float xfrac = float(x & fracMask) * fracNormalizer;
+    float yfrac = float(y & fracMask) * fracNormalizer;
+
+    // gi stands for gradient index
+    unsigned llgi = ll >> 29;
+    unsigned lrgi = lr >> 29;
+    unsigned ulgi = ul >> 29;
+    unsigned urgi = ur >> 29;
+
+    float xfracm1 = xfrac - 1.0;
+    float yfracm1 = yfrac - 1.0;
+
+    float lldot = GradDotProduct(llgi, xfrac,   yfrac);
+    float lrdot = GradDotProduct(lrgi, xfracm1, yfrac);
+    float uldot = GradDotProduct(ulgi, xfrac,   yfracm1);
+    float urdot = GradDotProduct(urgi, xfracm1, yfracm1);
+    
+    float hermitex = Hermite(xfrac);
+    float hermitey = Hermite(yfrac);
+
+    float linterp = (1.0f-hermitex)*lldot + hermitex*lrdot;
+    float uinterp = (1.0f-hermitex)*uldot + hermitex*urdot;
+    float interp = (1.0f-hermitey)*linterp + hermitey*uinterp;
+
+    float result = interp * 0.70710678f + 0.5f;
+    return result;
 }
 
 
@@ -1305,11 +1270,38 @@ inline uint64_t NoiseFunction2(uint64_t x)
     return result;
 }
 
+
+inline uint32_t NoiseFunction1(uint32_t x)
+{
+    uint32_t result = x * 1103515245 + 12345;
+    result ^= result << 13;
+    result ^= result >> 7;
+    result ^= result << 17;
+    return result;
+}
+
+
+inline uint32_t NoiseFunction2(uint32_t x)
+{
+    uint32_t result = x * 6680178296815197433 + 7046029254386353087;
+    result ^= result << 13;
+    result ^= result >> 7;
+    result ^= result << 17;
+    return result;
+}
+
 // x should be in [0,1]
 inline double Hermite(double x)
 {
     double xsquared = x * x;
-    return x * x * x * (6.0*x * x - 15.0*x + 10.0);
+    return x * xsquared * (6.0*xsquared - 15.0*x + 10.0);
+}
+
+// x should be in [0,1]
+inline float Hermite(float x)
+{
+    float xsquared = x * x;
+    return x * xsquared * (6.0f*xsquared - 15.0f*x + 10.0f);
 }
 
 // x should be in [0,1]
@@ -1321,6 +1313,18 @@ inline uint64_t ToFixedPoint12p52(double x)
     exponent = (exponent > 0) ? 0 : exponent;
     exponent = (exponent < -52) ? -52 : exponent;
     uint64_t result = mantissa >> -exponent;
+    return result;
+}
+
+// x should be in [0,1]
+inline uint32_t ToFixedPoint9p23(float x)
+{
+    uint32_t crosscast = *((uint32_t*)(&x));
+    uint32_t mantissa = 0x00800000 | (crosscast & 0x007fffff);
+    int32_t exponent = int32_t((0x7f800000 & crosscast) >> 23) - 127;
+    exponent = (exponent > 0) ? 0 : exponent;
+    exponent = (exponent < -23) ? -23 : exponent;
+    uint32_t result = mantissa >> -exponent;
     return result;
 }
 

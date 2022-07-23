@@ -64,9 +64,10 @@ void SDLCharGraphicsPane::Clear(unsigned* pixels, unsigned numWindowCols)
 }
 
 
-SDLCharGraphics::SDLCharGraphics()
+SDLCharGraphics::SDLCharGraphics(unsigned numPixelRows, unsigned numPixelCols) :
+    mPixelRows(numPixelRows), mPixelCols(numPixelCols)
 {
-    mPixels = new unsigned[500*1000];
+    mPixels = new unsigned[numPixelRows*numPixelCols];
 }
 
 
@@ -98,9 +99,15 @@ int SDLCharGraphics::WriteCharacters(SDLCharGraphicsPane* pane, unsigned* charBu
             }
             int fromIndex = fromRowStartIndex + fromX;
             int toIndex = toRowStartIndex + toU;
-            pane->mChars[toIndex] = charBuffer[fromIndex];
-            pane->mFGColors[toIndex] = fgClrBuffer[fromIndex];
-            pane->mBGColors[toIndex] = bgClrBuffer[fromIndex];
+            if (nullptr != charBuffer) {
+                pane->mChars[toIndex] = charBuffer[fromIndex];
+            }
+            if (nullptr != fgClrBuffer) {
+                pane->mFGColors[toIndex] = fgClrBuffer[fromIndex];
+            }
+            if (nullptr != bgClrBuffer) {
+                pane->mBGColors[toIndex] = bgClrBuffer[fromIndex];
+            }
         }
     }
 
@@ -112,7 +119,7 @@ int SDLCharGraphics::WriteCharacters(SDLCharGraphicsPane* pane, unsigned* charBu
 
 void SDLCharGraphics::UpdatePixelBuffer(SDLCharGraphicsPane* pane)
 {
-    pane->Clear(mPixels, 1000);
+    pane->Clear(mPixels, mPixelCols);
 
     for (unsigned j = 0; j < pane->mNumCharRows; j++) {
         unsigned charsRowStartIndex = j * pane->mNumCharCols;
@@ -124,7 +131,7 @@ void SDLCharGraphics::UpdatePixelBuffer(SDLCharGraphicsPane* pane)
                 unsigned bitmapRowStartIndex =
                     (y - pane->mNumCharMarginPixelRows) * pane->mCharSizePixelCols;
                 for (unsigned x = 0; x < pane->mNumPixelColsPerCharCol; x++) {
-                    unsigned* pixelsPtr = mPixels + (pixelsStartRow+y) * 1000 +
+                    unsigned* pixelsPtr = mPixels + (pixelsStartRow+y) * mPixelCols +
                                           pixelsStartCol+x;
                     if (pane->mReticle &&
                         i == pane->mNumCharCols/2 && j == pane->mNumCharRows/2 && 
