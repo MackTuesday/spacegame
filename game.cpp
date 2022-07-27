@@ -320,7 +320,7 @@ void HandleKeyDown(SDL_Event& sdlEvent, SDL_Window* win, SDLCharGraphics& charGr
         gCurrentState = nextState;
         UpdateGraphics(charGraphics, win);
     }
-    gCurrentState = (SDLK_END == sdlEvent.key.keysym.sym) ? nullptr : gCurrentState;
+    gCurrentState = (SDLK_ESCAPE == sdlEvent.key.keysym.sym) ? nullptr : gCurrentState;
 }
     
 
