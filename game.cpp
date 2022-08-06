@@ -19,6 +19,7 @@
 #include "GlobalConstants.h"
 #include "StarSystem.h"
 #include <algorithm>
+#include <cstring>
 #include <vector>
 
 
@@ -93,8 +94,10 @@ unsigned PlanetMassToSymbol(double massInKg);
 unsigned LifeRGB(double life);
 unsigned PlanetSymbolRGB(Planet* planet, StarSystem* starSystem);
 //vector<unsigned> PlanetPalette(uint32_t seed, unsigned size);
-void FormatInfo(unsigned* buffer, uint32_t posX, uint32_t posY, bool star, 
-                uint64_t starTableMod, uint64_t starTableLookup);
+void FormatSystemInfo(unsigned* buffer, uint32_t posX, uint32_t posY, StarSystem* starSystem);
+void TopComponents(vector<double>& v, int& first, int& second, int& third, double& total);
+void FormatPlanetComponents(char* line, vector<double>& abundances, Planet* planet);
+void FormatPlanetInfo(unsigned* buffer, uint32_t posX, uint32_t posY, Planet* planet);
 void PaintTerrain(SDL_Window* w);
 int UpdateGraphics(SDLCharGraphics& cg, SDL_Window* win);
 inline float PerlinNoise(uint32_t x, uint32_t y, unsigned fracbits);
@@ -550,7 +553,7 @@ unsigned PlanetSymbolRGB(Planet* planet, StarSystem* starSystem)
 }
 
 
-void FormatInfo(unsigned* buffer, uint32_t posX, uint32_t posY, StarSystem* starSystem)
+void FormatSystemInfo(unsigned* buffer, uint32_t posX, uint32_t posY, StarSystem* starSystem)
 {
     char line[32];
     sprintf(line, "%010u x %010u", posX, posY);
@@ -573,6 +576,117 @@ void FormatInfo(unsigned* buffer, uint32_t posX, uint32_t posY, StarSystem* star
             }
         }
     }
+}
+
+
+void TopComponents(vector<double>& v, int& first, int& second, int& third, double& total)
+{
+	first = -1;
+	second = -1;
+	third = -1;
+	total = 0.0;
+	double x1 = -1e+300;
+	double x2 = -1e+300;
+	double x3 = -1e+300;
+	for (int i = 0; i < v.size(); ++i) {
+		double x = v[i];
+		total += x;
+		if (x > x3) {
+			if (x > x2) {
+				x3 = x2;
+				third = second;
+				if (x > x1) {
+					x2 = x1;
+					second = first;
+					x1 = x;
+					first = i;
+				}
+				else {
+					x2 = x;
+					second = i;
+				}
+			}
+			else {
+				x3 = x;
+				third = i;
+			}
+		}
+	}
+}
+
+
+void FormatPlanetComponents(char* line, vector<double>& abundances, Planet* planet)
+{
+    const auto& comps = planet->mVolComponents; // Just to have a short variable name
+    int first, second, third;
+    double total, concSum;
+    string* form;
+    char* cptr;
+    TopComponents(abundances, first, second, third, total);
+    line[0] = '\0';
+    if (total > 0.0) {
+        concSum = 0.0;
+        form = &kTheComponentFormulae[comps[first]->mComponentIndex];
+        cptr = line;
+        strcpy(line, form->c_str());
+        cptr += form->length();
+        concSum += first / total;
+        if (concSum < 0.99) {
+            form = &kTheComponentFormulae[comps[second]->mComponentIndex];
+            sprintf(cptr, " %s", form->c_str());
+            cptr += form->length() + 1;
+            concSum += second / total;
+            if (concSum < 0.99) {
+                sprintf(cptr, " %s", 
+                        kTheComponentFormulae[comps[third]->mComponentIndex].c_str());
+            }
+        }
+    }
+}
+
+
+void FormatPlanetInfo(unsigned* buffer, uint32_t posX, uint32_t posY, Planet* planet)
+{
+    char line[32];
+    sprintf(line, "%010u x %010u", posX, posY);
+    CopyStrToIntBuffer(buffer, line, kInfoColumns);
+    
+    if (planet != nullptr) {
+		sprintf(line, "Temp %.0lf K", planet->mTemperature);
+		CopyStrToIntBuffer(buffer+kInfoColumns, line, kInfoColumns);
+		sprintf(line, "Pres %.3g atm", planet->mPressure);
+		CopyStrToIntBuffer(buffer+kInfoColumns*2, line, kInfoColumns);
+		
+		const auto& comps = planet->mVolComponents; // Just to have a short variable name
+		vector<double> abundances(comps.size());
+		
+		for (int i = 0; i < comps.size(); ++i) {
+			abundances[i] = comps[i]->mAtmAbundance;
+		}
+        FormatPlanetComponents(line, abundances, planet);
+        CopyStrToIntBuffer(buffer+kInfoColumns*3, line, kInfoColumns);
+		
+        strcpy(line, "Seas: ");
+		for (int i = 0; i < comps.size(); ++i) {
+			abundances[i] = comps[i]->mHydAbundance;
+		}
+        FormatPlanetComponents(line+6, abundances, planet);
+        CopyStrToIntBuffer(buffer+kInfoColumns*4, line, kInfoColumns);
+		
+        strcpy(line, "Clouds: ");
+		for (int i = 0; i < comps.size(); ++i) {
+			abundances[i] = comps[i]->mCldAbundance;
+		}
+        FormatPlanetComponents(line+8, abundances, planet);
+        CopyStrToIntBuffer(buffer+kInfoColumns*5, line, kInfoColumns);
+		
+        strcpy(line, "Frost: ");
+		for (int i = 0; i < comps.size(); ++i) {
+			abundances[i] = comps[i]->mFstAbundance;
+		}
+        FormatPlanetComponents(line+7, abundances, planet);
+        CopyStrToIntBuffer(buffer+kInfoColumns*6, line, kInfoColumns);
+	}
 }
 
 
@@ -678,6 +792,9 @@ void PaintTerrain(SDL_Window* w)
             }
         }
         numOctaves = terrainColsBits - 1;
+        // UnityFirstTerm is tuned for powers of 1/2, but somehow it's perfect for
+        // our purposes here also, where scale per buffer is not generally 1/2. I
+        // haven't bothered to figure out why this is.
         initOctaveScale = UnityFirstTerm(numOctaves);
         for (uint32_t j = 0; j < terrainRows; ++j) {
             for (uint32_t i = 0; i < terrainCols; ++i) {
@@ -720,11 +837,11 @@ void PaintTerrain(SDL_Window* w)
             // rows/2 + rows>>level + 
             //  [0, -rows/2>>level, -rows>>level, -rows*3/2>>level, -rows*2>>level] =
             // rows/2 + rows>>level - ((rows*j)>>8)>>level
-            int index = ((((i<<(terrainColsBits-9))>>gCurrentState->mLevel)-((terrainCols/2)>>gCurrentState->mLevel)+gCurrentState->mX) & 
-                         (terrainCols-1)) + 
-                        (((terrainRows>>1) + (terrainRows>>gCurrentState->mLevel) - 
-                          (((terrainRows*j)>>8)>>gCurrentState->mLevel) + gCurrentState->mY) << 
-                         terrainColsBits);
+            const int lev = gCurrentState->mLevel; // Just for a short variable name
+            int index = ((((i << (terrainColsBits-9)) >> lev) -
+                          (terrainCols/2 >> lev) + gCurrentState->mX) & terrainCols-1) + 
+                        (((terrainRows>>1) + (terrainRows>>lev) - (terrainRows*j >> (lev+8)) + 
+                          gCurrentState->mY) << terrainColsBits);
             if (index < 0 || index >= maxIndex) {
                 pixelsPtr[j * surf->w + i] = 0;
             }
@@ -796,7 +913,7 @@ int UpdateGraphics(SDLCharGraphics& cg, SDL_Window* w)
         ClearCharGraphicsBuffer(cgBuffer, kMaxColumns*kMaxRows);
         FillColorBuffer(fgClrBuffer, kMaxColumns*kMaxRows, 0xffffff);
         FillColorBuffer(bgClrBuffer, kMaxColumns*kMaxRows, 0);
-        FormatInfo(cgBuffer, gCurrentState->mX, gCurrentState->mY, gCurrentSystem);
+        FormatSystemInfo(cgBuffer, gCurrentState->mX, gCurrentState->mY, gCurrentSystem);
         cg.WriteCharacters(gCurrentState->mInfoPane, cgBuffer, fgClrBuffer, bgClrBuffer, 0, 0, 
                            kInfoColumns, kInfoRows);
     }
@@ -883,16 +1000,22 @@ int UpdateGraphics(SDLCharGraphics& cg, SDL_Window* w)
                            0, 0, kInfoColumns, kInfoRows);
     }
     else {
-        PaintTerrain(w);
+        PaintTerrain(w); // This paints directly to the screen as a side effect
+        ClearCharGraphicsBuffer(cgBuffer, kMaxColumns*kMaxRows);
+        FillColorBuffer(fgClrBuffer, kMaxColumns*kMaxRows, 0xffffff);
+        FillColorBuffer(bgClrBuffer, kMaxColumns*kMaxRows, 0);
+        FormatPlanetInfo(cgBuffer, gCurrentState->mX, gCurrentState->mY, gCurrentPlanet);
+        cg.WriteCharacters(gCurrentState->mInfoPane, cgBuffer, fgClrBuffer, bgClrBuffer, 0, 0, 
+                           kInfoColumns, kInfoRows);
     }
 
-    if (GameState::kPlanetary != gCurrentState->mID) {
-        unsigned const* pixelBuffer = cg.GetPixels();
-        for (unsigned j = 0; j < kMainWindowRows; j++) {
-            for (unsigned i = 0; i < kMainWindowCols; i++) {
-                ((unsigned*)surf->pixels)[j * surf->w + i] = 
-                    pixelBuffer[j * kMainWindowCols + i];
-            }
+    unsigned paintColsStart = (GameState::kPlanetary == gCurrentState->mID) ?
+                              gPlanetaryState->mInfoPane->mPosX : 0;
+    unsigned const* pixelBuffer = cg.GetPixels();
+    for (unsigned j = 0; j < kMainWindowRows; j++) {
+        for (unsigned i = paintColsStart; i < kMainWindowCols; i++) {
+            ((unsigned*)surf->pixels)[j * surf->w + i] = 
+                pixelBuffer[j * kMainWindowCols + i];
         }
     }
 
