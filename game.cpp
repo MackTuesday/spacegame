@@ -34,7 +34,7 @@
 #define kTerrainBuffRows    2000
 #define kInfoColumns          27
 #define kInfoRows             25
-#define kMaxPlanetaryLevel     6
+#define kMaxPlanetaryLevel     7
 
 // These need to be >= any of the other character Columns and Rows #defines.
 // This rule excludes the #defines that refer to number of pixel columsn and rows.
@@ -120,6 +120,8 @@ int main(int argc, char** argv)
     //AllocConsole();
     //HANDLE theConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     //freopen("CON", "w", stdout);
+    
+    freopen("/dev/tty", "w", stdout);
 
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window* win = 
@@ -744,10 +746,10 @@ void PaintTerrain(SDL_Window* w)
                     float wy = PerlinNoiseXPeriodic((i<<n)+warpyx, (j<<n)+warpyy, 
                                                     terrainScaleBits, 
                                                     warpyx, terrainColsBits+n);
-                    wx *= wx;
+                    /*wx *= wx;
                     wy *= wy;  // Yes, this transformation
                     wx -= 0.5; // is asymmetric around 0
-                    wy -= 0.5;
+                    wy -= 0.5;*/
                     float totalScale = 2.0f * octaveScale * terrainScale * warpStrength;
                     xbufval += uint32_t(wx * totalScale + 0.5);
                     ybufval += uint32_t(wy * totalScale + 0.5);
@@ -849,12 +851,13 @@ void PaintTerrain(SDL_Window* w)
                 unsigned s = gTerrainBuffer[index] * 256.0;
                 s = (s < 0x80000000) ? s : 0;
                 s = (s <= 255) ? s : 255;
+                s &= 0xf8;
                 pixelsPtr[j * surf->w + i] = 0x00010000 * s;
                 pixelsPtr[j * surf->w + i] += 0x00000100 * (s>>1);
                 pixelsPtr[j * surf->w + i] += 0x00000001 * (s>>2);
             }
             else {
-                pixelsPtr[j * surf->w + i] = 0x00004080;
+                pixelsPtr[j * surf->w + i] = 0x00002050;
             }
         }
     }
