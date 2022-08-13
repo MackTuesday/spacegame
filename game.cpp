@@ -79,8 +79,10 @@ static GameState* gCurrentState = nullptr;
 static unsigned cgBuffer[kMaxColumns*kMaxRows];
 static unsigned fgClrBuffer[kMaxColumns*kMaxRows];
 static unsigned bgClrBuffer[kMaxColumns*kMaxRows];
+static vector<vector<uint32_t>> gPlanetPalette(32, vector<uint32_t>(32, 0));
 static float gTerrainBuffer[kTerrainBuffColumns*kTerrainBuffRows];
 static double gWaterline = 0.0;
+static double gPlanetAltRange = 0.0;
 
 
 //GameState* 
@@ -93,11 +95,15 @@ unsigned LumToSymbol(double lum);
 unsigned PlanetMassToSymbol(double massInKg);
 unsigned LifeRGB(double life);
 unsigned PlanetSymbolRGB(Planet* planet, StarSystem* starSystem);
-//vector<unsigned> PlanetPalette(uint32_t seed, unsigned size);
 void FormatSystemInfo(unsigned* buffer, uint32_t posX, uint32_t posY, StarSystem* starSystem);
 void TopComponents(vector<double>& v, int& first, int& second, int& third, double& total);
 void FormatPlanetComponents(char* line, vector<double>& abundances, Planet* planet);
 void FormatPlanetInfo(unsigned* buffer, uint32_t posX, uint32_t posY, Planet* planet);
+inline uint32_t TerrainColor(uint32_t c);
+inline uint32_t PolarColor(uint32_t c);
+inline uint32_t ColorInterp(uint32_t ll, uint32_t ul, uint32_t lr, uint32_t ur, 
+                            float x, float y);
+vector<unsigned> PlanetPalette(uint32_t seed, unsigned size);
 void PaintTerrain(SDL_Window* w);
 int UpdateGraphics(SDLCharGraphics& cg, SDL_Window* win);
 inline float PerlinNoise(uint32_t x, uint32_t y, unsigned fracbits);
@@ -113,6 +119,11 @@ inline uint64_t NoiseFunction1(uint64_t x);
 inline uint64_t NoiseFunction2(uint64_t x);
 inline uint32_t NoiseFunction1(uint32_t x);
 inline uint32_t NoiseFunction2(uint32_t x);
+inline uint32_t GetR(uint32_t c);
+inline uint32_t GetG(uint32_t c);
+inline uint32_t GetB(uint32_t c);
+inline uint32_t FourCornerInterp(uint32_t ll, uint32_t ul, uint32_t lr, uint32_t ur, 
+                                 double x, double y);
 
 
 int main(int argc, char** argv)
@@ -692,6 +703,132 @@ void FormatPlanetInfo(unsigned* buffer, uint32_t posX, uint32_t posY, Planet* pl
 }
 
 
+inline uint32_t TerrainColor(uint32_t c)
+{
+    unsigned r = c & 0x00ff0000;
+    unsigned g = c & 0x0000ff00;
+    unsigned b = c & 0x000000ff;
+    r = r * 48 & 0xff000000;
+    g = g * 48 & 0x00ff0000;
+    b = b * 48 & 0x0000ff00;
+    unsigned k = (((c >> 24) * 112) >> 8) * 0x01010100;
+    return ((r | g | b) + k) >> 8;
+}
+
+
+inline uint32_t PolarColor(uint32_t c)
+{
+    unsigned r = c & 0x00ff0000;
+    unsigned g = c & 0x0000ff00;
+    unsigned b = c & 0x000000ff;
+    r = (r * 64) & 0xff000000;
+    g = (g * 64) & 0x00ff0000;
+    b = (b * 64) & 0x0000ff00;
+    unsigned result = ((r | g | b) + 0xc0c0c000) >> 8;
+    //unsigned channelShift = ((c >> 24) * 3 >> 8) * 8;
+    unsigned channelShift = ((c >> 24) * 3 >> 5) & 0x00000018;
+    result |= 0xff << channelShift;
+    return result;
+}
+
+
+inline uint32_t ColorInterp(uint32_t ll, uint32_t ul, uint32_t lr, uint32_t ur, 
+                            float x, float y)
+{
+    unsigned llr = GetR(ll);
+    unsigned llg = GetG(ll);
+    unsigned llb = GetB(ll);
+    unsigned ulr = GetR(ul);
+    unsigned ulg = GetG(ul);
+    unsigned ulb = GetB(ul);
+    unsigned lrr = GetR(lr);
+    unsigned lrg = GetG(lr);
+    unsigned lrb = GetB(lr);
+    unsigned urr = GetR(ur);
+    unsigned urg = GetG(ur);
+    unsigned urb = GetB(ur);
+    uint32_t r = FourCornerInterp(llr, ulr, lrr, urr, x, y);
+    uint32_t g = FourCornerInterp(llg, ulg, lrg, urg, x, y);
+    uint32_t b = FourCornerInterp(llb, ulb, lrb, urb, x, y);
+    return (r << 16) | (g << 8) | b;
+}
+
+
+vector<vector<unsigned>> PlanetPalette(uint32_t seed, unsigned numColors, unsigned numBands)
+{
+    vector<vector<unsigned>> result(numBands, vector<unsigned>(numColors, 0));
+    const uint32_t colorMask = 0xffffff;
+    
+    // a full gradient to make sure every space is assigned
+    seed = NoiseFunction1(seed);
+    uint32_t ll = TerrainColor(seed);
+    seed = NoiseFunction1(seed);
+    uint32_t ul = TerrainColor(seed);
+    seed = NoiseFunction1(seed);
+    uint32_t lr = TerrainColor(seed);
+    seed = NoiseFunction1(seed);
+    uint32_t ur = TerrainColor(seed);
+    for (unsigned i = 0; i < numBands; i++) {
+        float x = float(i) / numBands;
+        for (unsigned j = 0; j < numColors; j++) {
+            float y = float(j) / numColors;
+            result[i][j] = ColorInterp(ll, ul, lr, ur, x, y);
+        }
+    }
+    
+    // a bunch of partial gradients to make it interesting
+    const unsigned numPartials = 3;
+    for (unsigned n = 0; n < numPartials; n++) {
+        uint32_t widthHeight = NoiseFunction1(seed);
+        seed = widthHeight;
+        uint32_t w = numBands;//((widthHeight & 0x0000ffff) * numBands  >> 16) + 1;
+        uint32_t h = ((widthHeight >> 16)        * (numColors>>1) >> 16) + (numColors>>2);
+        uint32_t colorBand = NoiseFunction1(seed);
+        seed = colorBand;
+        uint32_t bandIdx  = 0;//(colorBand & 0x0000ffff) * (numBands  - w) >> 16;
+        uint32_t colorIdx = (colorBand >> 16)        * (numColors - h) >> 16;
+        seed = NoiseFunction1(seed);
+        ll = TerrainColor(seed);
+        seed = NoiseFunction1(seed);
+        ul = TerrainColor(seed);
+        seed = NoiseFunction1(seed);
+        lr = TerrainColor(seed);
+        seed = NoiseFunction1(seed);
+        ur = TerrainColor(seed);
+        for (unsigned i = bandIdx; i < bandIdx+w; i++) {
+            float x = float(i) / numBands;
+            for (unsigned j = colorIdx; j < colorIdx+h; j++) {
+                float y = float(j) / numColors;
+                result[i][j] = ColorInterp(ll, ul, lr, ur, x, y);
+            }
+        }
+    }
+    
+    // whitish colors for the poles
+    seed = NoiseFunction1(seed);
+    ll = PolarColor(seed);
+    seed = NoiseFunction1(seed);
+    ul = PolarColor(seed);
+    seed = NoiseFunction1(seed);
+    lr = PolarColor(seed);
+    seed = NoiseFunction1(seed);
+    ur = PolarColor(seed);
+    seed = NoiseFunction1(seed);
+    uint32_t numPolarBands = numBands; //((seed >> 16) * numBands >> 17) + 1;
+    seed = NoiseFunction1(seed);
+    uint32_t numPolarColors = ((seed >> 16) * 4 >> 16);// + numBands - 2;
+    for (unsigned i = numBands-numPolarBands; i < numBands; i++) {
+        float x = float(i+numPolarBands-numBands) / numPolarBands;
+        for (unsigned j = numColors-numPolarColors; j < numColors; j++) {
+            float y = float(j+numPolarColors-numColors) / numPolarColors;
+            result[i][j] = ColorInterp(ll, ul, lr, ur, x, y);
+        }
+    }
+    
+    return result;
+}
+
+
 // Gives a value, the partial power series sum of which equals 1
 // i.e. returns x such that x + x/2 + ... + x/2^(n-1) = 1
 inline float UnityFirstTerm(unsigned numTerms)
@@ -730,9 +867,11 @@ void PaintTerrain(SDL_Window* w)
         uint32_t multix = (paramSeed >> terrainScaleBits) << terrainScaleBits;
         paramSeed = NoiseFunction1(paramSeed);
         uint32_t multiy = paramSeed;
-        float warpStrength = float(paramSeed) / float(uint64_t(1)<<32) * 1.2f + 0.15f;
-        float scalePerOctave = 0.5f;
-        unsigned numOctaves = 1;
+        paramSeed = NoiseFunction1(paramSeed);
+        gPlanetPalette = PlanetPalette(paramSeed, 32, 32);
+        float warpStrength = float(paramSeed) / float(uint64_t(1)<<32) * 1.0f + 0.1f;
+        float scalePerOctave = 0.7f;
+        unsigned numOctaves = 2;
         float initOctaveScale = warpStrength * UnityFirstTerm(numOctaves);
         for (uint32_t j = 0; j < terrainRows; ++j) {
             for (uint32_t i = 0; i < terrainCols; ++i) {
@@ -823,13 +962,18 @@ void PaintTerrain(SDL_Window* w)
         sort(analysisBuffer.begin(), analysisBuffer.end());
         gWaterline = analysisBuffer[unsigned(floor((analysisBuffer.size()-1) *
                                                    sqrt(gCurrentPlanet->mHydCover)))];
+        gPlanetAltRange = analysisBuffer[analysisBuffer.size()-1] - gWaterline;
+        gPlanetAltRange = max(gPlanetAltRange, 1e-6);
     }
 
     SDL_Surface* surf = SDL_GetWindowSurface(w);
     unsigned* pixelsPtr = ((unsigned*)surf->pixels);
 
     int maxIndex = 1 << (2*terrainColsBits - 1);
+    const int lev = gCurrentState->mLevel; // Just for a short variable name
     for (int j = 0; j < 512; ++j) {
+        int terrainRow = (terrainRows>>1) + (terrainRows>>lev) - (terrainRows*j >> (lev+8)) + 
+                         gCurrentState->mY;
         for (int i = 0; i < 512; ++i) {
             // j: [0, 128, 256, 384, 512] ==> 
             // [rows*3/2, rows, rows/2, 0, -rows/2]  {level 0}
@@ -839,22 +983,41 @@ void PaintTerrain(SDL_Window* w)
             // rows/2 + rows>>level + 
             //  [0, -rows/2>>level, -rows>>level, -rows*3/2>>level, -rows*2>>level] =
             // rows/2 + rows>>level - ((rows*j)>>8)>>level
-            const int lev = gCurrentState->mLevel; // Just for a short variable name
-            int index = ((((i << (terrainColsBits-9)) >> lev) -
-                          (terrainCols/2 >> lev) + gCurrentState->mX) & terrainCols-1) + 
-                        (((terrainRows>>1) + (terrainRows>>lev) - (terrainRows*j >> (lev+8)) + 
-                          gCurrentState->mY) << terrainColsBits);
+            int terrainCol = (((i << (terrainColsBits-9)) >> lev) -
+                              (terrainCols/2 >> lev) + gCurrentState->mX) & terrainCols-1;
+            int index = terrainCol + (terrainRow << terrainColsBits);
             if (index < 0 || index >= maxIndex) {
                 pixelsPtr[j * surf->w + i] = 0;
             }
             else if (gTerrainBuffer[index] > gWaterline) {
-                unsigned s = gTerrainBuffer[index] * 256.0;
-                s = (s < 0x80000000) ? s : 0;
-                s = (s <= 255) ? s : 255;
-                s &= 0xf8;
-                pixelsPtr[j * surf->w + i] = 0x00010000 * s;
-                pixelsPtr[j * surf->w + i] += 0x00000100 * (s>>1);
-                pixelsPtr[j * surf->w + i] += 0x00000001 * (s>>2);
+                // dy/dx = -ax (x-0.5) (x-1.0) = -axxx + 1.5axx - 0.5ax
+                // y = -0.25axxxx + 0.5axxx - 0.25axx + C
+                // y(0)   = 1.0
+                // y(0.5) = 0.0
+                // y(1)   = 1.0
+                // -0.25a + 0.5a - 0.25a + 1.0 = 1.0
+                // -0.25a/16 + 0.5a/8 - 0.25a/4 + 1.0 = 0.0
+                // -a/64 + a/16 - a/16 + 1 = 0
+                // a = 64
+                // y = -16xxxx + 32xxx - 16xx + 1.0
+                //   = -16xx(xx - 2x + 1) + 1
+                //   = -16xx(x-1)(x-1) + 1
+                double l = terrainRow / double(terrainRows);
+                l = -16.0 * l * l * (l-1.0) * (l-1.0) + 1.0;
+                double s = (gTerrainBuffer[index] - gWaterline + 0.5*gPlanetAltRange*l) / 
+                           gPlanetAltRange * 256.0;
+                s = max(s, 0.0);
+                s = min(s, 255.0);
+                unsigned t = unsigned(s);
+                //s &= 0xf0;
+                //pixelsPtr[j * surf->w + i]  = 0x00010000 *  t;
+                //pixelsPtr[j * surf->w + i] += 0x00000100 * (t>>1);
+                //pixelsPtr[j * surf->w + i] += 0x00000001 * (t>>2);
+                //if (t == 255) {
+                //    pixelsPtr[j * surf->w + i] = 0x00e8e8e8;
+                //}
+                pixelsPtr[j * surf->w + i] = 
+                    gPlanetPalette[unsigned(l*31.999999)][t>>3];
             }
             else {
                 pixelsPtr[j * surf->w + i] = 0x00002050;
@@ -1453,6 +1616,33 @@ inline uint32_t ToFixedPoint9p23(float x)
     uint32_t result = mantissa >> -exponent;
     return result;
 }
+
+
+inline uint32_t GetR(uint32_t c)
+{
+    return (c & 0x00ff0000) >> 16;
+}
+
+
+inline uint32_t GetG(uint32_t c)
+{
+    return (c & 0x0000ff00) >> 8;
+}
+
+
+inline uint32_t GetB(uint32_t c)
+{
+    return c & 0x000000ff;
+}
+
+
+inline uint32_t FourCornerInterp(uint32_t ll, uint32_t ul, uint32_t lr, uint32_t ur, 
+                                 double x, double y)
+{
+    return uint32_t(floor((ll * (1.0-y) + ul * y) * (1.0-x) + 
+                          (lr * (1.0-y) + ur * y) *      x  + 0.5));
+}
+
 
 /*
 int UpdateGraphics(SDLCharGraphics& cg, SDL_Window* w, unsigned posX, unsigned posY)
